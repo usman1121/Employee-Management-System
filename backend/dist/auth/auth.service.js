@@ -44,35 +44,117 @@ var __metadata = (this && this.__metadata) || function (k, v) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AuthService = void 0;
 const common_1 = require("@nestjs/common");
+const jwt_1 = require("@nestjs/jwt");
 const prisma_service_1 = require("../prisma/prisma.service");
 const bcrypt = __importStar(require("bcrypt"));
 let AuthService = class AuthService {
     prisma;
-    constructor(prisma) {
+    jwtService;
+    constructor(prisma, jwtService) {
         this.prisma = prisma;
+        this.jwtService = jwtService;
     }
-    async login(email, password) {
+    async login(loginDto) {
         const employee = await this.prisma.employee.findUnique({
-            where: { email },
+            where: { email: loginDto.email },
         });
         if (!employee) {
-            throw new Error('Invalid credentials');
+            throw new common_1.UnauthorizedException('Invalid credentials');
         }
-        const isPasswordValid = await bcrypt.compare(password, employee.password);
+        const isPasswordValid = await bcrypt.compare(loginDto.password, employee.password);
         if (!isPasswordValid) {
-            throw new Error('Invalid credentials');
+            throw new common_1.UnauthorizedException('Invalid credentials');
         }
+        const payload = { sub: employee.employee_id, email: employee.email, role: employee.role };
+        const accessToken = this.jwtService.sign(payload);
+        const expiryDate = new Date();
+        expiryDate.setSeconds(expiryDate.getSeconds() + Number(process.env.JWT_EXPIRATION || 86400));
+        await this.prisma.session.create({
+            data: {
+                employee_id: employee.employee_id,
+                token: accessToken,
+                expiry_date: expiryDate,
+            },
+        });
         return {
-            employee_id: employee.employee_id,
-            full_name: employee.full_name,
-            email: employee.email,
-            role: employee.role,
+            access_token: accessToken,
+            employee: {
+                employee_id: employee.employee_id,
+                full_name: employee.full_name,
+                email: employee.email,
+                role: employee.role,
+            },
         };
+    }
+    async register(registerDto) {
+        const existingEmployee = await this.prisma.employee.findUnique({
+            where: { email: registerDto.email },
+        });
+        if (existingEmployee) {
+            throw new common_1.ConflictException('Email already registered');
+        }
+        const hashedPassword = await bcrypt.hash(registerDto.password, 10);
+        const employee = await this.prisma.employee.create({
+            data: {
+                full_name: registerDto.full_name,
+                email: registerDto.email,
+                password: hashedPassword,
+                role: registerDto.role,
+                phone: registerDto.phone,
+                position: registerDto.position,
+                hire_date: new Date(),
+                department_id: registerDto.department_id,
+                address_id: registerDto.address_id,
+            },
+        });
+        const payload = { sub: employee.employee_id, email: employee.email, role: employee.role };
+        const accessToken = this.jwtService.sign(payload);
+        const expiryDate = new Date();
+        expiryDate.setSeconds(expiryDate.getSeconds() + Number(process.env.JWT_EXPIRATION || 86400));
+        await this.prisma.session.create({
+            data: {
+                employee_id: employee.employee_id,
+                token: accessToken,
+                expiry_date: expiryDate,
+            },
+        });
+        return {
+            access_token: accessToken,
+            employee: {
+                employee_id: employee.employee_id,
+                full_name: employee.full_name,
+                email: employee.email,
+                role: employee.role,
+            },
+        };
+    }
+    async getProfile(employeeId) {
+        const employee = await this.prisma.employee.findUnique({
+            where: { employee_id: employeeId },
+            select: {
+                employee_id: true,
+                full_name: true,
+                email: true,
+                phone: true,
+                role: true,
+                status: true,
+                hire_date: true,
+                position: true,
+                department: true,
+                address: true,
+                created_at: true,
+            },
+        });
+        if (!employee) {
+            throw new common_1.UnauthorizedException('Employee not found');
+        }
+        return employee;
     }
 };
 exports.AuthService = AuthService;
 exports.AuthService = AuthService = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [prisma_service_1.PrismaService])
+    __metadata("design:paramtypes", [prisma_service_1.PrismaService,
+        jwt_1.JwtService])
 ], AuthService);
 //# sourceMappingURL=auth.service.js.map
